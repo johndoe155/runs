@@ -56,7 +56,7 @@ const GL_CONST = {
   UNSIGNED_SHORT:0x1403, FLOAT:0x1406
 };
 let objId = 0;
-const stats = { bufferDatas: [], drawCalls: [], attribPointers: [], uniforms: [], uniVals: {} };
+const stats = { bufferDatas: [], drawCalls: [], attribPointers: [], uniforms: [], uniVals: {}, eboUploads: [], lastEbo: null };
 const shaderSrc = new Map();
 const programShaders = new Map();
 
@@ -93,8 +93,14 @@ const glMock = Object.assign(Object.create(GL_CONST), {
     return null;
   },
   createBuffer(){ return {id:++objId}; },
-  bindBuffer(){},
-  bufferData(target, data, usage){ stats.bufferDatas.push({bytes: data.byteLength, usage}); },
+  bindBuffer(target, buf){ if(target === 0x8893 && buf) stats.lastEbo = buf; },
+  bufferData(target, data, usage){
+    if(target === 0x8893 && stats.lastEbo){
+      stats.eboUploads.push({id: stats.lastEbo.id, len: data.length});
+    } else {
+      stats.bufferDatas.push({bytes: data.byteLength, usage, data});
+    }
+  },
   bufferSubData(target, offset, data){ stats.lastSubData = {bytes: data.byteLength, offset}; },
   enableVertexAttribArray(){},
   vertexAttribPointer(loc, size, type, norm, stride, offset){
@@ -112,7 +118,7 @@ const glMock = Object.assign(Object.create(GL_CONST), {
   uniform2f(loc, a, b){ if(loc){ stats.uniforms.push({name:loc.name, v:2}); stats.uniVals[loc.name] = [a, b]; } },
   uniform1i(loc, v){ if(loc){ stats.uniforms.push({name:loc.name, v:3}); stats.uniVals[loc.name] = v; } },
   drawArrays(mode, first, count){ stats.drawCalls.push({mode, first, count}); },
-  drawElements(mode, count, type, offset){ stats.drawCalls.push({mode, count, type, offset}); }
+  drawElements(mode, count, type, offset){ stats.drawCalls.push({mode, count, type, offset, eboId: stats.lastEbo ? stats.lastEbo.id : null}); }
 });
 
 // ---------- mock browser env ----------
@@ -211,29 +217,33 @@ const mockFetch = (url) => {
   // Phase 5: keyboard navigation (let the click-triggered morph finish first)
   for(let f = 0; f < 160; f++){ await frame(); }  // ~2.7s → hold (uT=1)
   assert(stats.uniVals['uT'] >= 1, 'morph completed before keyboard test');
-  const captionPose = () => elements['poseCaption'].textContent;
-  const displayIdx = () => Number(captionPose().trim().slice(0,2)) - 1;
-  const beforePose = displayIdx();
-  fire('keydown', {key:'ArrowRight', ctrlKey:false, metaKey:false, altKey:false, preventDefault(){}});
+  // The displayed pose at hold = the pose of the last-drawn edge EBO (at te=1
+  // only the to-side edge set is drawn). eboUploads are in pose order 0..3.
+  const eboPose = id => stats.eboUploads.findIndex(u => u.id === id);
+  const displayedPose = () => {
+    const lines = stats.drawCalls.filter(d => d.mode === 1);
+    return eboPose(lines[lines.length-1].eboId);
+  };
+  const press = key => fire('keydown', {key, ctrlKey:false, metaKey:false, altKey:false, preventDefault(){}});
+  const d0 = displayedPose();
+  press('ArrowRight');
   for(let f = 0; f < 10; f++){ await frame(); }
   assert(stats.uniVals['uT'] <= 0.1, 'ArrowRight restarted the morph');
   for(let f = 0; f < 160; f++){ await frame(); }  // complete the morph
-  const afterRight = displayIdx();
-  assert(afterRight !== beforePose, 'ArrowRight advanced the pose');
-  fire('keydown', {key:'ArrowLeft', ctrlKey:false, metaKey:false, altKey:false, preventDefault(){}});
-  for(let f = 0; f < 160; f++){ await frame(); }  // complete the morph back
-  assert(displayIdx() === beforePose, 'ArrowLeft stepped the displayed pose back');
-
-  // Phase 5b: pose indicator dots — built from pose names, clickable to jump
-  const dots = elements['poseDots'].children;
-  assert(dots.length === 4, 'four pose indicator dots rendered');
-  assert(dots.every((d,i) => d.attrs['aria-pressed'] !== undefined), 'dots expose aria-pressed');
-  assert(dots.some(d => d.classList.contains('active')), 'active dot highlighted');
-  const dotTarget = (displayIdx() + 2) % 4;
-  dots[dotTarget].fire('click', {stopPropagation(){}});
+  const d1 = displayedPose();
+  assert(d1 === (d0+1)%4, 'ArrowRight advanced the displayed pose by one');
+  press('ArrowRight');
   for(let f = 0; f < 160; f++){ await frame(); }  // complete the morph
-  assert(displayIdx() === dotTarget, 'clicking a pose dot jumps to that pose');
-  assert(dots[dotTarget].classList.contains('active'), 'clicked dot becomes active');
+  const d2 = displayedPose();
+  assert(d2 === (d1+1)%4, 'second ArrowRight advanced again by one');
+  press('ArrowLeft');
+  for(let f = 0; f < 160; f++){ await frame(); }  // complete the morph
+  const d3 = displayedPose();
+  assert(d3 === d1, 'ArrowLeft stepped the displayed pose back by one');
+  press('ArrowLeft');
+  for(let f = 0; f < 160; f++){ await frame(); }  // complete the morph
+  const d4 = displayedPose();
+  assert(d4 === d0, 'second ArrowLeft returned to the starting pose');
 
   // Phase 6: prefers-reduced-motion → frozen cycle, uReduced=1
   mqChangeHandler({matches: true});
@@ -250,6 +260,25 @@ const mockFetch = (url) => {
   assert(bufSizes.includes(20000*22*4), 'static VBO = 22 floats x 20000 (1.76 MB) uploaded');
   assert(bufSizes.includes(20000*3*4), 'dynamic VBO = 3 floats x 20000 uploaded');
   assert(stats.lastSubData && stats.lastSubData.bytes === 20000*3*4, 'dynamic VBO updated via bufferSubData each frame');
+
+  // orientation: JSON poses inherit image top-left origin; the app must mirror
+  // every particle's y about the pose y-range center at load time (pose0: 1.0 - y)
+  const staticUpload = stats.bufferDatas.find(b => b.bytes === 20000*22*4 && b.data instanceof Float32Array);
+  assert(!!staticUpload, 'static VBO payload captured for orientation check');
+  const vboData = staticUpload.data;
+  const pose0raw = JSON.parse(fs.readFileSync(path.join(ROOT, 'data/pose0.json'), 'utf8'));
+  const yMid0 = (pose0raw.yrange[0] + pose0raw.yrange[1])/2;
+  let yMax = -1e9, yMin = 1e9, iMax = -1, iMin = -1;
+  for(let k = 0; k < 20000; k++){
+    const y = pose0raw.pos[k*2+1];
+    if(y > yMax){ yMax = y; iMax = k; }
+    if(y < yMin){ yMin = y; iMin = k; }
+  }
+  assert(Math.abs(vboData[iMax*22+1] - (2*yMid0 - yMax)) < 1e-4,
+    'topmost JSON particle (head) mirrored to bottom of VBO y-range');
+  assert(Math.abs(vboData[iMin*22+1] - (2*yMid0 - yMin)) < 1e-4,
+    'bottommost JSON particle mirrored to top of VBO y-range');
+  assert(Math.abs(vboData[iMax*22] - pose0raw.pos[iMax*2]) < 1e-4, 'x coordinates untouched by the flip');
 
   // attribute offsets for the 22-float stride (filter particle program: stride 88 bytes)
   const ptr = {};

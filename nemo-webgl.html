@@ -21,42 +21,6 @@
   }
   .grain{position:fixed;inset:0;pointer-events:none;z-index:4;opacity:.045;mix-blend-mode:overlay;}
 
-  .hero-ui{position:fixed;inset:0;z-index:2;pointer-events:none;}
-  .topbar{
-    position:absolute;top:0;left:0;right:0;display:flex;align-items:center;justify-content:space-between;
-    padding:22px 28px;box-sizing:border-box;
-  }
-  .logo{color:var(--ink);font-weight:800;letter-spacing:.14em;font-size:15px;}
-  .logo .accent{background:linear-gradient(90deg,var(--cyan),var(--violet),var(--magenta));-webkit-background-clip:text;background-clip:text;color:transparent;}
-  .menu{color:var(--ink);opacity:.8;font-size:20px;border:1px solid rgba(255,255,255,.18);border-radius:10px;width:38px;height:38px;display:flex;align-items:center;justify-content:center;}
-
-  .eyebrow{
-    position:absolute;left:28px;top:34%;transform:translateY(-50%);
-    color:rgba(230,230,240,.65);font-size:11px;letter-spacing:.22em;font-weight:600;
-    border:1px solid rgba(255,255,255,.14);border-radius:999px;padding:9px 16px;
-    background:rgba(255,255,255,.03);
-  }
-
-  .headline{
-    position:absolute;left:26px;top:calc(34% + 46px);margin:0;max-width:60vw;
-    font-size:clamp(32px, 6vw, 74px);line-height:1.02;font-weight:800;letter-spacing:-0.01em;
-  }
-  .headline .solid{display:block;color:var(--ink);}
-  .headline .outline{display:block;color:transparent;-webkit-text-stroke:1.4px rgba(245,244,250,.88);}
-  .headline .accent2{background:linear-gradient(90deg,var(--cyan),var(--violet));-webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-stroke:0;}
-
-  .cta{
-    position:absolute;left:28px;top:calc(34% + 46px + 230px);pointer-events:auto;
-    background:linear-gradient(90deg,var(--cyan),var(--violet),var(--magenta));
-    border:none;border-radius:12px;padding:16px 26px;color:#0a0812;font-weight:800;
-    letter-spacing:.08em;font-size:12px;cursor:pointer;
-  }
-
-  .hint{
-    position:absolute;left:28px;bottom:22px;color:rgba(230,230,240,.45);
-    font-size:11px;letter-spacing:.04em;font-family:ui-monospace,Menlo,monospace;
-  }
-
   /* ---- loading overlay (shown while the four pose JSONs are fetched) ---- */
   .loading-overlay{
     position:fixed;inset:0;z-index:20;background:var(--bg);
@@ -83,41 +47,7 @@
   .loading-overlay.error .loading-spinner{display:none;}
   @media (prefers-reduced-motion: reduce){ .loading-spinner{animation:none;} }
 
-  /* ---- pose navigation dots ---- */
-  .pose-caption{
-    position:fixed;left:50%;bottom:66px;transform:translateX(-50%);z-index:6;
-    color:rgba(230,230,240,.55);font-size:10px;letter-spacing:.28em;text-transform:uppercase;
-    font-family:ui-monospace,Menlo,monospace;pointer-events:none;white-space:nowrap;
-  }
-  .pose-dots{
-    position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:6;
-    display:flex;align-items:flex-end;gap:16px;pointer-events:auto;
-  }
-  .pdot{
-    display:flex;flex-direction:column;align-items:center;gap:8px;
-    background:none;border:0;padding:6px 4px;margin:0;cursor:pointer;
-    color:rgba(230,230,240,.45);font-size:9px;letter-spacing:.14em;
-    font-family:ui-monospace,Menlo,monospace;outline-offset:3px;
-  }
-  .pdot i{
-    width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.28);display:block;
-    transition:transform .25s ease, background .25s ease, box-shadow .25s ease;
-  }
-  .pdot:hover i{background:rgba(255,255,255,.6);}
-  .pdot.active{color:rgba(245,244,250,.95);}
-  .pdot.active i{
-    background:linear-gradient(90deg,var(--cyan),var(--violet),var(--magenta));
-    transform:scale(1.45);box-shadow:0 0 12px rgba(158,140,240,.9);
-  }
-  .pdot:focus-visible{outline:1px solid rgba(158,140,240,.8);}
-
   #fallback{position:fixed;inset:0;display:none;align-items:center;justify-content:center;color:#8892b0;font-size:13px;z-index:10;text-align:center;padding:24px;box-sizing:border-box;}
-
-  @media (max-width:640px){
-    .headline{max-width:88vw;}
-    .cta{top:calc(34% + 46px + 260px);}
-    .hint{display:none;}
-  }
 </style>
 </head>
 <body>
@@ -135,24 +65,6 @@
   <filter id="grainFilter"><feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="3" stitchTiles="stitch"/></filter>
   <rect width="100%" height="100%" filter="url(#grainFilter)"/>
 </svg>
-
-<div class="hero-ui">
-  <div class="topbar">
-    <span class="logo">NEMO<span class="accent">VERSE</span></span>
-    <span class="menu ui-interactive" tabindex="0" role="button" aria-label="Menu">≡</span>
-  </div>
-  <div class="eyebrow">● THE REGISTRY · THE NEMOVERSE IS LIVE</div>
-  <h1 class="headline">
-    <span class="solid">ONE <span class="accent2">CANON</span>.</span>
-    <span class="outline">INFINITE</span>
-    <span class="solid accent2">VERSIONS.</span>
-  </h1>
-  <button class="cta ui-interactive">ENTER THE NEMOVERSE</button>
-  <div class="hint">move your cursor to disturb the field · click / tap to pulse &amp; morph · use ← → or the dots to navigate</div>
-</div>
-
-<div class="pose-caption" id="poseCaption" aria-hidden="true">01 · TORN-PAPER</div>
-<div class="pose-dots ui-interactive" id="poseDots" role="group" aria-label="Pose navigation"></div>
 
 <script>
 (function(){
@@ -173,8 +85,6 @@
   var canvas = document.getElementById('c');
   var overlay = document.getElementById('loading');
   var loadStatus = document.getElementById('loadStatus');
-  var poseDots = document.getElementById('poseDots');
-  var poseCaption = document.getElementById('poseCaption');
 
   var gl = canvas.getContext('webgl', {alpha:false, antialias:true}) ||
            canvas.getContext('experimental-webgl', {alpha:false, antialias:true});
@@ -653,8 +563,16 @@
         }
         var xs = new Float32Array(N), ys = new Float32Array(N);
         var r = new Float32Array(N), g = new Float32Array(N), b = new Float32Array(N);
+        // Orientation fix: the pose JSONs inherit the image coordinate origin
+        // (top-left, +y downward). The canvas layout is also +y downward in
+        // pixels, so without correction heads/up-facing features land at the
+        // bottom of the screen. Mirror every particle's y about the vertical
+        // center of the pose's y-range once here at load time — the shader,
+        // CPU physics rest targets, and edge generation all consume these
+        // arrays, so a single flip keeps them consistent.
+        var yMid = (p.yrange[0] + p.yrange[1])/2;
         for(var i=0;i<N;i++){
-          xs[i]=p.pos[i*2];   ys[i]=p.pos[i*2+1];
+          xs[i]=p.pos[i*2];   ys[i]=2*yMid - p.pos[i*2+1];
           r[i]=p.rgb[i*3]/255; g[i]=p.rgb[i*3+1]/255; b[i]=p.rgb[i*3+2]/255;
         }
         return {name: p.name, xs: xs, ys: ys, r: r, g: g, b: b};
@@ -798,15 +716,12 @@
     toPose = target;
     cycleTimer = reduced ? TRANSITION_MS : 0;   // reduced motion: change is instant
     curFrom = poses[fromPose]; curTo = poses[toPose];
-    updatePoseUI();
   }
   function advance(){ jumpTo((toPose+1)%4); }
   function advancePrev(){ jumpTo((toPose+3)%4); }
 
   window.addEventListener('pointerdown', function(e){
-    var el = e.target;
-    if(el && el.closest && el.closest('.ui-interactive')) return;
-    // click / tap anywhere: shockwave + camera-spin kick + advance the morph cycle
+    // click / tap anywhere on the canvas: shockwave + camera-spin kick + advance the morph cycle
     shockX = e.clientX*DPR; shockY = e.clientY*DPR;
     if(!reduced){
       shockAge = 0;
@@ -845,49 +760,6 @@
   }
 
   // ---------------------------------------------------------------
-  // pose navigation dots + caption
-  // ---------------------------------------------------------------
-  var dotEls = [];
-  function buildPoseUI(){
-    poseDots.innerHTML = '';
-    dotEls = [];
-    for(var p=0;p<4;p++){
-      (function(idx){
-        var btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'pdot';
-        btn.setAttribute('aria-pressed', 'false');
-        btn.title = poses[idx].name;
-        btn.setAttribute('aria-label', 'Show pose ' + (idx+1) + ' — ' + poses[idx].name);
-        var dot = document.createElement('i');
-        var label = document.createElement('span');
-        label.textContent = '0' + (idx+1);
-        btn.appendChild(dot); btn.appendChild(label);
-        btn.addEventListener('click', function(ev){
-          ev.stopPropagation();
-          jumpTo(idx);
-        });
-        dotEls.push(btn);
-        poseDots.appendChild(btn);
-      })(p);
-    }
-    updatePoseUI();
-  }
-  var shownPose = -1;
-  function updatePoseUI(){
-    if(!dotEls.length) return;
-    var display = cycleTimer/TRANSITION_MS >= 0.5 ? toPose : fromPose;
-    if(display === shownPose) return;
-    shownPose = display;
-    for(var p=0;p<dotEls.length;p++){
-      var on = (p === display);
-      dotEls[p].classList.toggle('active', on);
-      dotEls[p].setAttribute('aria-pressed', on ? 'true' : 'false');
-    }
-    poseCaption.textContent = '0' + (display+1) + ' · ' + poses[display].name.toUpperCase();
-  }
-
-  // ---------------------------------------------------------------
   // bloom helpers
   // ---------------------------------------------------------------
   function blurPass(srcTex, dst, w, h, dx, dy){
@@ -916,8 +788,6 @@
       }
       var t = Math.min(1, cycleTimer/TRANSITION_MS);
       var te = t*t*(3.0-2.0*t);
-
-      updatePoseUI();  // keep dots/caption tracking the displayed pose
 
       // CPU physics loop → dynamic VBO (ox, oy, speed)
       computeRest(t);
@@ -1005,7 +875,6 @@
     for(var p=0;p<4;p++) buildEdges(p);
     computeRest(0);
     for(var i=0;i<N;i++){ ph.px[i]=ph.rx[i]; ph.py[i]=ph.ry[i]; }
-    buildPoseUI();
     dataReady = true;
     overlay.classList.add('done');
     loadStatus.textContent = 'FIELD READY — ENTERING';
