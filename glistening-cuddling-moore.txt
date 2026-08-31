@@ -1,0 +1,110 @@
+# Plan: Nemoverse WebGL Hero Overhaul — Image-Driven Particle Morph System
+
+## Context
+
+This plan overhauls the Nemoverse WebGL hero in `nemo-webgl.html` to replace the hardcoded pose geometry and palette with four offline-extracted particle formations (`pose0.json`–`pose3.json`). The new pipeline adds real per-particle color, spring-back physics, fluid cursor response, inertia, shockwaves, camera spin, and edge crossfading. It respects `prefers-reduced-motion` and serves a loading overlay while the JSON data is fetched at runtime.
+
+The plan was developed using the **frontend-design** skill framework and the Nemoverse project's existing architecture, then refined with the user's explicit answers to clarification questions.
+
+## Phase 1: Initial Understanding
+
+**Key files examined:**
+- `/data/data/com.termux/files/home/nemoverse/nemo-webgl.html` (62 KB, 561 lines) — the existing WebGL hero containing hardcoded data
+- `/data/data/com.termux/files/home/nemoverse/data/pose0.json`–`pose3.json` — generated particle arrays with `{n, pos[40000×2], rgb[60000]}`
+- `/data/data/com.termux/files/home/nemoverse/plan.txt` — original implementation plan with extraction pipeline details
+
+**Hardcoded data to remove (lines 98, 319–323):**
+- `DATA.palette` — 11 hardcoded RGB colors
+- `DATA.poseB64` — 4 base64-encoded particle pose arrays
+- `DATA.edgesB64` / `DATA.edgeCount` — base64-encoded line edges
+- `decodePose()` function (line 303) — decodes base64→{xs, ys, ci}
+- `var STRIDE_F = 13` (line 323) — old 13-float stride
+
+**New approach:** Use `Promise.all(fetch(...))` to load four JSON files, then build GPU buffers and hide the loading overlay.
+
+## Phase 2: Design
+
+### 2A. File Modifications
+
+The entire implementation lives in `nemo-webgl.html`. Key changes:
+
+1. **Loading overlay** — Add a `.loading-overlay` div covering the canvas, shown during `Promise.all` fetches and hidden on completion or error.
+2. **Remove hardcoded data** — Delete `DATA.palette`, `DATA.poseB64`, `DATA.edgesB64`, `DATA.edgeCount`, `decodePose()`, `b64ToBytes()`, and `var STRIDE_F = 13`.
+3. **Add JSON fetch** — After the IIFE starts, use `Promise.all([fetch('data/pose0.json'), ..., fetch('data/pose3.json')])` to load the particle data.
+   - On failure: display a serving note (`<p>Run with `python3 -m http.server`</p>`)
+   - On success: parse JSON, build GPU buffers, hide overlay
+4. **22-float vertex stride** — Replace the old 13-float layout with:
+   - `aPoseAB` (vec4): 4 floats — pose A's start/end
+   - `aPoseCD` (vec4): 4 floats — pose C's start/end
+   - `aColA` (vec3): 3 floats — per-pose color A
+   - `aColB` (vec3): 3 floats — per-pose color B
+   - `aColC` (vec3): 3 floats — per-pose color C
+   - `aColD` (vec3): 3 floats — per-pose color D
+   - `aMeta` (vec2): 2 floats — seed and size
+   - Total: 4+4+3+3+3+3+2 = 22 floats per particle (≈1.7 MB at N=20,000)
+5. **Vertex shader** — Updated `VS_PARTICLE` with:
+   - Staggered easing: `ti = smoothstep(clamp((uT - seed*0.35)/0.65, 0, 1))`
+   - Mix positions and colors between source/destination poses using `ti`
+   - Mouse repulsion, shockwaves, camera spin applied in shader
+   - Hooke spring forces computed on CPU each frame
+6. **CPU physics loop** — Runs each frame:
+   - Maintains `Float32Arrays` for `(ox, oy, speed)` per particle
+   - Applies Hooke spring forces with seed-based stiffness and damping variance
+   - Gaussian cursor repulsion + tangential vortex scaled by pointer velocity
+   - Updates dynamic VBO `(ox, oy, speed)` for vertex shader consumption
+7. **Click response** — On pointerdown:
+   - Radial shockwave impulse at pointer position
+   - Advance the morph cycle (`fromPose → toPose`)
+   - Camera-spin kick using seed-derived pseudo-depth
+8. **Edge generation** — At load time, spatial-hash near-neighbor search generates per-pose edge index buffers. During morphs, crossfade from→to edges with two line draws and `uLineAlpha`.
+9. **Bright pass / bloom pipeline** — Unchanged architecture but benefits from new per-particle RGB colors.
+10. **Accessibility** — Respect `prefers-reduced-motion`: freeze idle/cycle animation when reduced motion is active. Keep 2.4 s morph / 5.2 s hold cycle otherwise.
+11. **Keyboard navigation** — Left/right arrows cycle poses.
+12. **Pose indicator dots** — Small UI controls at bottom.
+
+### 2B. Shader Changes Summary
+
+- **VS_PARTICLE**: Receive the 22-float stride. Calculate staggered easing factor `ti`. Mix positions: `base = mix(pFrom, pTo, ti)`. Apply mouse repulsion, shockwave impulse (if active), camera spin, and spring forces from the dynamic VBO. Output `gl_PointSize` with per-particle size modulation.
+- **FS_POINT**: Use the per-pose color attributes interpolated via `ti` to shade particles with real RGB color. Keep existing falloff.
+- **VS_LINE / FS_LINE**: Two draws per morph segment, crossfaded with `uLineAlpha`. Edge indices generated via spatial hash at load time.
+- **setCommonUniforms**: New `uLineAlpha` uniform. Also pass `uReduced` and camera spin state.
+
+### 2C. Physics Model (CPU loop)
+
+```
+For each particle i:
+  dx = ox[i] - mouseX; dy = oy[i] - mouseY
+  dist2 = dx*dx + dy*dy
+  // Hooke spring toward rest position
+  fx = -k * dx - d * vx[i]
+  // Gaussian cursor repulsion
+  if dist2 < R_repulse^2:
+    fx += repulsion * (dx / dist2)
+  // Tangential vortex scaled by velocity
+  vx += fx * dt
+  // Integrate
+  x += vx * dt
+  update VBO
+```
+
+### 2D. Verification Checklist
+
+- ✅ Run `node --check` against extracted inline script
+- ✅ Validate JSON schema: array lengths match, particle count consistent, coordinates within bounds
+- ✅ Serve with `python3 -m http.server` and confirm `curl` fetches work
+- ✅ `index.html` + 4 pose JSON files resolve with `curl`
+- ✅ Visual check in WebGL-capable browser
+- ✅ `prefers-reduced-motion` media query freezes animation
+- ✅ Keyboard left/right cycles poses
+
+## Phase 3: Review
+
+The plan aligns with:
+- User's answers specifying exact shader formula, vertex layout, and fetch approach
+- The original `plan.txt` extraction pipeline details
+- The `frontend-design` skill's design philosophy (bold aesthetic choices, intentional motion)
+- Nemoverse's existing architecture (particle morphing, interaction model, bloom pipeline)
+
+## Phase 4: Final Plan
+
+This plan is ready for user approval. I will now exit plan mode to await user confirmation before implementing.
