@@ -78,7 +78,7 @@
   if(reducedMQ && reducedMQ.addEventListener){
     reducedMQ.addEventListener('change', function(e){
       reduced = !!e.matches;
-      if(reduced){ spin = 0; spinVel = 0; shockAge = 1e9; }
+      if(reduced){ spin = 0; spinVel = 0; shockAge = 1e9; pendingAdvanceAt = 0; }
     });
   }
 
@@ -487,38 +487,52 @@
   var K_BASE = 55, DAMP_BASE = 3.2;
   var REP_A = 2600, REP_SIG = 110, REP_R = 240;
   var VORTEX = 540;
+  var SPEED_REF = 900;   // speed-adaptive drag: above this speed, damping ramps up (px/s)
+  var VMAX = 2200;       // hard per-particle speed cap — stacked impulses can't build orbits
+  var HEAL_DAMP = 2.6;   // extra damping injected when a pose transition begins
+  var HEAL_TAU = 450;    // heal-damping decay constant (ms)
+  var ENERGY_TAU = 650;  // interaction-energy decay (ms) — the void heals once input stops
 
   function physicsStep(dt){
     var s = seeds, px = ph.px, py = ph.py, vx = ph.vx, vy = ph.vy, rx = ph.rx, ry = ph.ry;
     var pActive = pointer.active;
     var mx = pointer.x, my = pointer.y;
+    var energy = interactEnergy;                        // 0..1 — decays while input is idle
+    var healBoost = HEAL_DAMP * Math.exp(-healT/HEAL_TAU); // fades after each pose transition
     var psf = 0.7 + 1.3*Math.min(pointer.speed, 2400)/2400;
     var tang = VORTEX * Math.min(pointer.speed/1600, 1.0);
     var R2 = REP_R*REP_R, sig2 = 2*REP_SIG*REP_SIG;
     for(var i=0;i<N;i++){
       var sd = s[i];
-      var k = K_BASE*(0.55 + 0.9*sd);        // seed-based stiffness variance
-      var damp = DAMP_BASE*(0.6 + 0.8*sd);   // seed-based damping variance
-      var ax = (rx[i]-px[i])*k - vx[i]*damp; // Hooke spring toward rest
-      var ay = (ry[i]-py[i])*k - vy[i]*damp;
-      if(pActive){
+      var k = K_BASE*(0.55 + 0.9*sd);                 // seed-based stiffness variance
+      var damp0 = DAMP_BASE*(0.6 + 0.8*sd);           // seed-based damping variance
+      var sp = Math.sqrt(vx[i]*vx[i] + vy[i]*vy[i]);
+      // Speed-adaptive drag: slow particles keep the fluid feel, over-accelerated
+      // ones settle hard (no long ringing tails). healBoost adds transient damping
+      // right after a pose transition so the field re-forms cleanly.
+      var drag = (damp0 + healBoost) * (1.0 + sp/SPEED_REF);
+      var ax = (rx[i]-px[i])*k - vx[i]*drag;          // Hooke spring toward rest
+      var ay = (ry[i]-py[i])*k - vy[i]*drag;
+      if(pActive && energy > 0.02){
         var dx = px[i]-mx, dy = py[i]-my;
         var d2 = dx*dx + dy*dy;
         if(d2 < R2){
           var dd = Math.sqrt(d2) + 0.001;
-          var g = REP_A * Math.exp(-d2/sig2) * psf;   // Gaussian repulsion
+          var g = REP_A * Math.exp(-d2/sig2) * psf * energy;   // Gaussian repulsion
           ax += (dx/dd)*g; ay += (dy/dd)*g;
-          ax += (-dy/dd)*tang; ay += (dx/dd)*tang;    // tangential vortex ∝ pointer velocity
+          ax += (-dy/dd)*tang*energy; ay += (dx/dd)*tang*energy; // vortex ∝ pointer velocity
         }
       }
       vx[i] += ax*dt; vy[i] += ay*dt;
+      var sp2 = Math.sqrt(vx[i]*vx[i] + vy[i]*vy[i]);
+      if(sp2 > VMAX){ var scv = VMAX/sp2; vx[i]*=scv; vy[i]*=scv; sp2 = VMAX; }
       px[i] += vx[i]*dt; py[i] += vy[i]*dt;
       var ddx = px[i]-rx[i], ddy = py[i]-ry[i];
       var m = Math.max(Math.abs(ddx), Math.abs(ddy));
       if(m > 340){ var sc = 340/m; ddx*=sc; ddy*=sc; px[i]=rx[i]+ddx; py[i]=ry[i]+ddy; }
-      dynData[i*3]   = ddx;                                  // ox
-      dynData[i*3+1] = ddy;                                  // oy
-      dynData[i*3+2] = Math.sqrt(vx[i]*vx[i] + vy[i]*vy[i]); // speed
+      dynData[i*3]   = ddx;                                   // ox
+      dynData[i*3+1] = ddy;                                   // oy
+      dynData[i*3+2] = sp2;                                   // speed
     }
     gl.bindBuffer(gl.ARRAY_BUFFER, dynVbo);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, dynData);
@@ -533,7 +547,8 @@
       var d2 = dx*dx + dy*dy;
       if(d2 > 260*260) continue;
       var dd = Math.sqrt(d2) + 0.001;
-      var imp = strength * Math.exp(-d2/s2);
+      var sp = Math.sqrt(vx[i]*vx[i] + vy[i]*vy[i]);
+      var imp = strength * Math.exp(-d2/s2) / (1.0 + sp/1400); // fast particles absorb less
       vx[i] += (dx/dd)*imp;
       vy[i] += (dy/dd)*imp;
     }
@@ -697,6 +712,7 @@
     }
     pointer.x = nx; pointer.y = ny;
     pointer.active = true;
+    interactEnergy = Math.min(1, interactEnergy + 0.18); // active input sustains the field
     pvel.lastT = now;
   });
   window.addEventListener('pointerleave', function(){
@@ -707,28 +723,58 @@
   var fromPose = 0, toPose = 1, cycleTimer = 0;
   var spin = 0, spinVel = 0, spinDir = 1;
   var shockX = 0, shockY = 0, shockAge = 1e9;
+  // interaction stabilization state (rapid-input & void-healing lifecycle)
+  var interactEnergy = 0;   // 0..1 — gates cursor forces; decays so the void always heals
+  var lastBurst = -1e9;     // last pointerdown impulse time (ms) — rapid-click energy budget
+  var pendingAdvanceAt = 0; // delayed morph-advance deadline (ms): the void forms and
+                            // lingers, then the pose transition re-forms the field
+  var healT = 1e9;          // ms since the last pose transition began (heal-damping window)
 
   function jumpTo(target){
     if(!poses.length) return;
     if(target === toPose && cycleTimer >= TRANSITION_MS) return; // already displaying it
     var display = cycleTimer/TRANSITION_MS >= 0.5 ? toPose : fromPose;
+    pendingAdvanceAt = 0;   // a direct jump supersedes any scheduled advance
     fromPose = display;
     toPose = target;
     cycleTimer = reduced ? TRANSITION_MS : 0;   // reduced motion: change is instant
     curFrom = poses[fromPose]; curTo = poses[toPose];
+    healVoid();   // every pose transition re-absorbs the displaced field
   }
   function advance(){ jumpTo((toPose+1)%4); }
   function advancePrev(){ jumpTo((toPose+3)%4); }
 
+  function healVoid(){
+    // Pose-transition heal: quell stored momentum and open the heal-damping
+    // window (physicsStep reads healT). The displaced particles then glide into
+    // the new formation as the staggered morph unfolds, closing the void.
+    if(!ph) return;
+    var vx = ph.vx, vy = ph.vy;
+    for(var i=0;i<N;i++){ vx[i] *= 0.25; vy[i] *= 0.25; }
+    healT = 0;
+  }
+
   window.addEventListener('pointerdown', function(e){
-    // click / tap anywhere on the canvas: shockwave + camera-spin kick + advance the morph cycle
+    // click / tap anywhere on the canvas: shockwave + camera-spin kick. The
+    // morph advance is scheduled ~600 ms later so the void forms and lingers
+    // on impact, then the pose transition re-forms the field. Rapid inputs are
+    // rate-gated: the impulse budget refills over 600 ms, so stacked double-taps
+    // add far less energy instead of compounding.
     shockX = e.clientX*DPR; shockY = e.clientY*DPR;
     if(!reduced){
+      var now = performance.now();
+      var burst = Math.min(1, Math.max(0.25, (now - lastBurst)/600));
+      lastBurst = now;
       shockAge = 0;
-      spinVel += spinDir*2.4; spinDir = -spinDir;
-      if(dataReady) shockImpulse(shockX, shockY, 260);
+      interactEnergy = 1;
+      spinVel = Math.max(-2.6, Math.min(2.6, spinVel + spinDir*2.2*burst));
+      spinDir = -spinDir;
+      if(dataReady) shockImpulse(shockX, shockY, 260*burst);
     }
-    if(dataReady) advance();
+    if(dataReady){
+      if(reduced) advance();
+      else pendingAdvanceAt = performance.now() + 600;  // debounced: spam re-schedules it
+    }
   });
 
   window.addEventListener('keydown', function(e){
@@ -784,6 +830,10 @@
     if(dataReady){
       if(!reduced){
         cycleTimer += dt;
+        if(pendingAdvanceAt && now >= pendingAdvanceAt){
+          pendingAdvanceAt = 0;
+          advance();   // delayed pose transition — re-forms the field after the void lingers
+        }
         if(cycleTimer > TRANSITION_MS+HOLD_MS) advance();
       }
       var t = Math.min(1, cycleTimer/TRANSITION_MS);
@@ -793,6 +843,8 @@
       computeRest(t);
       pvel.x *= Math.exp(-3.2*dt/1000); pvel.y *= Math.exp(-3.2*dt/1000);
       pointer.speed = Math.sqrt(pvel.x*pvel.x + pvel.y*pvel.y);
+      interactEnergy *= Math.exp(-dt/ENERGY_TAU);  // void heals once input stops
+      healT += dt;                                 // heal-damping window ages
       physicsStep(dt/1000);
 
       // shockwave / camera-spin state

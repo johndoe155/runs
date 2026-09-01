@@ -101,7 +101,19 @@ const glMock = Object.assign(Object.create(GL_CONST), {
       stats.bufferDatas.push({bytes: data.byteLength, usage, data});
     }
   },
-  bufferSubData(target, offset, data){ stats.lastSubData = {bytes: data.byteLength, offset}; },
+  bufferSubData(target, offset, data){
+    // scan the live dynamic VBO: per-frame speed stats + global max (speed cap check)
+    let mx = 0, sum = 0;
+    for(let i = 2; i < data.length; i += 3){
+      const v = data[i];
+      if(v > mx) mx = v;
+      sum += v;
+    }
+    stats.lastSpeedMax = mx;
+    stats.lastSpeedMean = sum / (data.length/3);
+    if(mx > (stats.maxSpeedSeen || 0)) stats.maxSpeedSeen = mx;
+    stats.lastSubData = {bytes: data.byteLength, offset};
+  },
   enableVertexAttribArray(){},
   vertexAttribPointer(loc, size, type, norm, stride, offset){
     stats.attribPointers.push({loc, size, stride, offset});
@@ -157,7 +169,12 @@ const mockFetch = (url) => {
   const fn = new Function('window','document','fetch','requestAnimationFrame','performance',
     'console','setTimeout','clearTimeout',
     src);
-  fn(mockWindow, mockDocument, mockFetch, raf, performance, console, setTimeout, clearTimeout);
+  // synthetic clock shared by rAF timestamps AND performance.now() inside the app,
+  // so ms-based deadlines (e.g. the 600 ms delayed morph advance) advance
+  // deterministically with the harness's frame loop.
+  let simNow = performance.now();
+  const mockPerf = { now: () => simNow };
+  fn(mockWindow, mockDocument, mockFetch, raf, mockPerf, console, setTimeout, clearTimeout);
 
   // wait for async load pipeline
   let ok = false;
@@ -170,8 +187,8 @@ const mockFetch = (url) => {
 
   // ---------- behavioral phases ----------
   const assert = (cond, msg) => { if(!cond){ console.error('FAIL:', msg); process.exitCode = 1; } else console.log('ok:', msg); };
-  let now = performance.now(); // rAF timestamps share the performance.now() clock
-  const frame = async (ms = 16.7) => { now += ms; step(now); await new Promise(r => setImmediate(r)); };
+  let now = simNow; // frame clock continues from the synthetic app clock (no real-time gap)
+  const frame = async (ms = 16.7) => { now += ms; simNow = now; step(now); await new Promise(r => setImmediate(r)); };
   const lineDrawsPerFrame = [];
   const trackFrame = () => {
     const before = stats.drawCalls.length;
@@ -200,22 +217,45 @@ const mockFetch = (url) => {
   for(let f = 0; f < 340; f++){ end = trackFrame(); await frame(); end(); }  // ~5.7s more
   assert(stats.uniVals['uFromIndex'] === 1, 'auto-cycle advanced to uFromIndex=1');
 
-  // Phase 4: pointer move + click → shockwave + spin kick + manual advance
+  // Phase 4: pointer move + click → shock + spin kick; morph advance is DELAYED
   fire('pointermove', {clientX: 500, clientY: 400});
   for(let f = 0; f < 30; f++){ await frame(); }
   fire('pointerdown', {clientX: 500, clientY: 400, target: {closest: () => null}});
   await frame();
   assert(stats.uniVals['uShockStrength'] > 0, 'click triggered radial shockwave (uShockStrength > 0)');
-  assert(stats.uniVals['uT'] <= 0.02, 'click restarted morph (uT reset)');
-  let spun = false;
-  for(let f = 0; f < 60; f++){
+  let spun = false, notResetEarly = true;
+  for(let f = 0; f < 18; f++){
+    await frame();
+    if(Math.abs(stats.uniVals['uSpin']) > 0.01) spun = true;
+    if(stats.uniVals['uT'] < 0.3) notResetEarly = false;  // morph must still be running
+  }
+  assert(notResetEarly, 'morph NOT restarted instantly — the void lingers before the transition');
+  for(let f = 18; f < 60; f++){
     await frame();
     if(Math.abs(stats.uniVals['uSpin']) > 0.01) spun = true;
   }
   assert(spun, 'camera spin kick oscillates uSpin after click');
+  assert(stats.uniVals['uT'] <= 0.3, 'delayed advance fired (~600 ms) and restarted the morph');
 
-  // Phase 5: keyboard navigation (let the click-triggered morph finish first)
-  for(let f = 0; f < 160; f++){ await frame(); }  // ~2.7s → hold (uT=1)
+  // Phase 4b: rapid-click stability — 5 clicks ~120 ms apart (double-tap spam)
+  const uTSamples = [];
+  for(let c = 0; c < 5; c++){
+    fire('pointerdown', {clientX: 640, clientY: 360, target: {closest: () => null}});
+    for(let f = 0; f < 7; f++){ await frame(); uTSamples.push(stats.uniVals['uT']); }
+  }
+  for(let f = 0; f < 45; f++){ await frame(); uTSamples.push(stats.uniVals['uT']); }
+  const resets = uTSamples.reduce((n, v, i) => (i > 0 && uTSamples[i-1] > 0.3 && v < 0.1) ? n+1 : n, 0);
+  assert(resets <= 1, 'rapid clicks: morph restarts at most once (debounced advance)');
+  assert(stats.maxSpeedSeen <= 2200, 'rapid clicks: per-particle speed capped at VMAX (no chaotic orbits)');
+  assert(stats.maxSpeedSeen >= 200, 'rapid clicks: impulses still produced visible motion');
+
+  // Phase 4c: void healing — morph completes, then the field settles back
+  for(let f = 0; f < 150; f++){ await frame(); }   // complete the morph
+  for(let f = 0; f < 90; f++){ await frame(); }    // ~1.5 s settle
+  assert(stats.lastSpeedMean < 50, 'void healed: field settled back into formation');
+
+  // Phase 5: keyboard navigation (already in hold after the settle phase)
+  for(let f = 0; f < 90; f++){ await frame(); }    // buffer inside the hold window
   assert(stats.uniVals['uT'] >= 1, 'morph completed before keyboard test');
   // The displayed pose at hold = the pose of the last-drawn edge EBO (at te=1
   // only the to-side edge set is drawn). eboUploads are in pose order 0..3.
